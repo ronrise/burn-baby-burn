@@ -45,6 +45,8 @@ burn 50000 --model haiku    # cheap and fast
 burn 100000 --model sonnet  # walk away
 ```
 
+![burn in action](screenshot.png)
+
 ---
 
 ## License
