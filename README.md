@@ -1,4 +1,4 @@
-# Burn, baby, burn
+# Burn, baby, burn (those tokens)
 
 ![burn-baby-burn](burn.png)
 
