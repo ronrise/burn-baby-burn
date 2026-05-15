@@ -34,6 +34,16 @@ Drops `burn` into `~/.local/bin` — no sudo, no Homebrew tap. Needs
 
 ---
 
+## Enterprise version
+
+We are currently working on a paid enterprise-ready version, which will have:
+
+- 4x burn rate
+- SSO/SAML Support
+- Role-Based Burn Access
+
+Please contact us if you are interested.
+
 ## Usage
 
 ```bash
