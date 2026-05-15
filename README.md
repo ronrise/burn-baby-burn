@@ -10,17 +10,6 @@ A bash one-liner that burns Claude Code **or Codex** tokens on purpose.
 burn 50000  # burn 50,000 tokens
 ```
 
-### 🆕 Now with Codex support! 🤖
-
-Don't have Claude Code installed? No problem — `burn` now falls back to
-[Codex](https://github.com/openai/codex) automatically, or pick your weapon
-explicitly with `--backend`:
-
-```bash
-burn 50000 --backend codex                     # burn through OpenAI tokens
-burn 50000 --backend codex --model gpt-5.5     # specify the model
-```
-
 ---
 
 ## Install and run in 20 seconds
