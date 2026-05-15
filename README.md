@@ -28,12 +28,12 @@ total that hits your bill.
 ## Install
 
 ```bash
-brew tap dtnewman/burn https://github.com/dtnewman/burn_baby_burn
-brew install burn
+curl -fsSL https://raw.githubusercontent.com/dtnewman/burn-baby-burn/main/install.sh | bash
 ```
 
-Needs [Claude Code](https://docs.claude.com/claude-code) authenticated on
-your `PATH` and `jq` (brew pulls it in).
+Drops `burn` into `~/.local/bin` — no sudo, no Homebrew tap. Needs
+[Claude Code](https://docs.claude.com/claude-code) authenticated on your
+`PATH` and `jq` (`brew install jq`).
 
 ---
 
