@@ -48,4 +48,4 @@ burn 100000 --model sonnet  # walk away
 
 ## License
 
-MIT. Burn responsibly. 🔥
+MIT (but it's all vibe-coded so who really knows who owns it?). Burn responsibly. 🔥
