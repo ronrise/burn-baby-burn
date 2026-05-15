@@ -3,15 +3,16 @@
 set -euo pipefail
 
 REPO="dtnewman/burn-baby-burn"
-SRC="https://raw.githubusercontent.com/${REPO}/main/bin/burn"
+BASE_URL="https://raw.githubusercontent.com/${REPO}/main/bin"
 DEST_DIR="${HOME}/.local/bin"
-DEST="${DEST_DIR}/burn"
 
 mkdir -p "$DEST_DIR"
-curl -fsSL "$SRC" -o "$DEST"
-chmod +x "$DEST"
+curl -fsSL "$BASE_URL/burn"            -o "$DEST_DIR/burn"
+# Sourced by burn when using --backend codex to compute estimated cost.
+curl -fsSL "$BASE_URL/codex_rates.sh"  -o "$DEST_DIR/codex_rates.sh"
+chmod +x "$DEST_DIR/burn"
 
-echo "✅ installed burn → $DEST"
+echo "✅ installed burn → $DEST_DIR/burn"
 
 case ":${PATH}:" in
   *":${DEST_DIR}:"*)

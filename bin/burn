@@ -1,32 +1,46 @@
 #!/usr/bin/env bash
-# burn — a token-burning harness around Claude Code.
-# Usage: burn TOKENS [--model MODEL]
+# burn — a token-burning harness around Claude Code or Codex CLI.
+# Usage: burn TOKENS [--model MODEL] [--backend claude|codex]
 set -euo pipefail
 
+# Resolve this script's directory so we can find sibling files (codex_pricing.py).
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+
 FILLER_TOKENS=1000
-SYSTEM_OVERHEAD_TOKENS=9000 # measured: claude -p system prompt + tool defs
-TOKENS_PER_CALL=$((SYSTEM_OVERHEAD_TOKENS + FILLER_TOKENS))
-MIN_TOKENS=$TOKENS_PER_CALL # asking for less than one call can't be honored
+# Backend-specific system overhead, measured empirically per CLI.
+CLAUDE_SYSTEM_OVERHEAD_TOKENS=9000  # claude -p with --tools ""
+CODEX_SYSTEM_OVERHEAD_TOKENS=12000  # codex exec --sandbox read-only
 FILLER_LINE="Burn baby burn, this is a disco inferno, burning tokens is for great engineers. "
 
 usage() {
   cat <<EOF
-burn — spin up Claude Code in a loop to burn approximately N tokens.
+burn — spin up Claude Code or Codex in a loop to burn approximately N tokens.
 
 Usage:
-  burn TOKENS [--model MODEL]
+  burn TOKENS [--model MODEL] [--backend claude|codex]
 
 Arguments:
-  TOKENS         Target tokens to burn (minimum ${MIN_TOKENS}).
+  TOKENS         Target tokens to burn. Minimum per call:
+                   claude: $((CLAUDE_SYSTEM_OVERHEAD_TOKENS + FILLER_TOKENS))
+                   codex:  $((CODEX_SYSTEM_OVERHEAD_TOKENS + FILLER_TOKENS))
 
 Options:
-  --model NAME   Pass through to 'claude --model' (e.g. haiku, sonnet, opus).
-  -h, --help     Show this help and exit.
+  --model NAME       Model to pass through (e.g. haiku, sonnet, gpt-5).
+  --backend NAME     Which CLI to drive: 'claude' or 'codex'.
+                     Default: claude if installed, else codex.
+  -h, --help         Show this help and exit.
 EOF
 }
 
 model=""
 tokens=""
+backend=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
   -h | --help)
@@ -43,6 +57,18 @@ while [[ $# -gt 0 ]]; do
     ;;
   --model=*)
     model="${1#*=}"
+    shift
+    ;;
+  --backend)
+    if [[ $# -lt 2 ]]; then
+      echo "error: --backend requires a value" >&2
+      exit 2
+    fi
+    backend="$2"
+    shift 2
+    ;;
+  --backend=*)
+    backend="${1#*=}"
     shift
     ;;
   --)
@@ -73,20 +99,49 @@ if ! [[ "$tokens" =~ ^[0-9]+$ ]]; then
   echo "error: TOKENS must be a positive integer (got '$tokens')" >&2
   exit 2
 fi
-if ((tokens < MIN_TOKENS)); then
-  echo "error: tokens must be at least ${MIN_TOKENS} (got ${tokens})" >&2
-  exit 2
+
+# Resolve backend: explicit flag > auto-detect (claude preferred, codex fallback).
+if [[ -z "$backend" ]]; then
+  if command -v claude >/dev/null 2>&1; then
+    backend=claude
+  elif command -v codex >/dev/null 2>&1; then
+    backend=codex
+  else
+    echo "error: neither 'claude' nor 'codex' found on PATH." >&2
+    echo "       install Claude Code: https://docs.claude.com/claude-code" >&2
+    echo "       or Codex CLI:        https://github.com/openai/codex" >&2
+    exit 1
+  fi
 fi
 
-if ! command -v claude >/dev/null 2>&1; then
-  echo "error: 'claude' CLI not found on PATH." >&2
-  echo "       install Claude Code first: https://docs.claude.com/claude-code" >&2
+case "$backend" in
+  claude) SYSTEM_OVERHEAD_TOKENS=$CLAUDE_SYSTEM_OVERHEAD_TOKENS ;;
+  codex)  SYSTEM_OVERHEAD_TOKENS=$CODEX_SYSTEM_OVERHEAD_TOKENS ;;
+  *)
+    echo "error: unknown --backend '$backend' (must be 'claude' or 'codex')" >&2
+    exit 2
+    ;;
+esac
+
+if ! command -v "$backend" >/dev/null 2>&1; then
+  echo "error: '$backend' CLI not found on PATH." >&2
+  case "$backend" in
+    claude) echo "       install Claude Code: https://docs.claude.com/claude-code" >&2 ;;
+    codex)  echo "       install Codex CLI:   https://github.com/openai/codex" >&2 ;;
+  esac
   exit 1
 fi
 if ! command -v jq >/dev/null 2>&1; then
-  echo "error: 'jq' not found on PATH (used to parse Claude Code's JSON output)." >&2
+  echo "error: 'jq' not found on PATH (used to parse CLI JSON output)." >&2
   echo "       install with: brew install jq" >&2
   exit 1
+fi
+
+TOKENS_PER_CALL=$((SYSTEM_OVERHEAD_TOKENS + FILLER_TOKENS))
+MIN_TOKENS=$TOKENS_PER_CALL
+if ((tokens < MIN_TOKENS)); then
+  echo "error: tokens must be at least ${MIN_TOKENS} for backend '${backend}' (got ${tokens})" >&2
+  exit 2
 fi
 
 # ~4 chars/token is the standard rule of thumb for English text.
@@ -239,15 +294,51 @@ burned=0
 iteration=0
 total_cost=0.000000
 BAR_WIDTH=30
-claude_pid=""
+cli_pid=""
 last_output=""
 
-claude_cmd=(claude -p --output-format json --no-session-persistence --tools "")
-if [[ -n "$model" ]]; then
-  claude_cmd+=(--model "$model")
+# Build CLI command for the chosen backend.
+case "$backend" in
+  claude)
+    cli_cmd=(claude -p --output-format json --no-session-persistence --tools "")
+    [[ -n "$model" ]] && cli_cmd+=(--model "$model")
+    # --tools is variadic, so terminate flag parsing before the prompt.
+    cli_cmd+=(--)
+    ;;
+  codex)
+    cli_cmd=(codex exec --json --skip-git-repo-check --sandbox read-only)
+    [[ -n "$model" ]] && cli_cmd+=(--model "$model")
+    ;;
+esac
+
+# Resolve whether we can report dollar cost for this run:
+#   - claude reports it directly in JSON.
+#   - codex doesn't, so we estimate from token counts using codex_rates.sh.
+#     If the rates file is missing or the chosen model isn't in the table,
+#     we silently fall back to tokens-only display.
+cost_reported=0
+cost_model=""
+if [[ "$backend" == claude ]]; then
+  cost_reported=1
+elif [[ "$backend" == codex ]]; then
+  if [[ -f "$SCRIPT_DIR/codex_rates.sh" ]]; then
+    # shellcheck source=codex_rates.sh
+    source "$SCRIPT_DIR/codex_rates.sh"
+    # Assume gpt-5.5 unless the user passed --model.
+    cost_model="${model:-gpt-5.5}"
+    if codex_has_rates "$cost_model"; then
+      cost_reported=1
+    fi
+  fi
 fi
-# `--tools` is variadic, so terminate flag parsing before the prompt.
-claude_cmd+=(--)
+
+format_cost_field() {
+  if ((cost_reported)); then
+    printf '$%s' "$total_cost"
+  else
+    printf 'cost n/a'
+  fi
+}
 
 draw_bar() {
   local pct filled empty bar="" i suffix="${1:-}"
@@ -258,8 +349,8 @@ draw_bar() {
   for ((i = 0; i < filled; i++)); do bar+='█'; done
   for ((i = 0; i < empty; i++)); do bar+='░'; done
   # \033[K clears any leftover characters from a longer previous draw.
-  printf "\r[%s] %3d%% • %d/%d tokens • \$%s • %d call(s)%s\033[K" \
-    "$bar" "$pct" "$burned" "$tokens" "$total_cost" "$iteration" "$suffix"
+  printf "\r[%s] %3d%% • %d/%d tokens • %s • %d call(s)%s\033[K" \
+    "$bar" "$pct" "$burned" "$tokens" "$(format_cost_field)" "$iteration" "$suffix"
 }
 
 restore_cursor() {
@@ -297,44 +388,82 @@ fmt_num() {
 }
 
 on_interrupt() {
-  if [[ -n "$claude_pid" ]]; then
-    kill "$claude_pid" 2>/dev/null || true
-    wait "$claude_pid" 2>/dev/null || true
+  if [[ -n "$cli_pid" ]]; then
+    kill "$cli_pid" 2>/dev/null || true
+    wait "$cli_pid" 2>/dev/null || true
   fi
-  local cost_rounded
-  cost_rounded=$(round_cents "$total_cost")
+  local burned_fmt cost_msg
+  burned_fmt=$(fmt_num "$burned")
+  if ((cost_reported)); then
+    cost_msg=$(printf "💰 spent \$%s" "$(round_cents "$total_cost")")
+  else
+    cost_msg="💰 cost not reported by codex"
+  fi
   printf "\n\n🛑 stopped early.\n\n"
-  printf "   🔥 You torched %s tokens across %s call(s), and spent \$%s\n\n" "$cost_rounded 💰💰💰" "$burned" "$iteration"
-  printf "   💰 spent "
+  printf "   🔥 torched %s tokens across %s call(s) • %s\n\n" "$burned_fmt" "$iteration" "$cost_msg"
   exit 130
 }
 trap on_interrupt INT
 
-# Run one claude call in the background while animating flames. On success
-# leaves the parsed stdout in $last_output. Returns the claude exit status.
-run_claude() {
+# Run one CLI call in the background while animating flames. On success
+# leaves the parsed stdout in $last_output. Returns the CLI exit status.
+run_cli() {
   local output_file
   output_file=$(mktemp)
-  "${claude_cmd[@]}" "$prompt" >"$output_file" 2>/dev/null &
-  claude_pid=$!
+  # </dev/null prevents codex from waiting on stdin when run in background.
+  "${cli_cmd[@]}" "$prompt" >"$output_file" 2>/dev/null </dev/null &
+  cli_pid=$!
 
   local frame=0
-  while kill -0 "$claude_pid" 2>/dev/null; do
+  while kill -0 "$cli_pid" 2>/dev/null; do
     redraw_disco $((frame % 4))
     frame=$((frame + 1))
     sleep 0.4
   done
 
-  if wait "$claude_pid" 2>/dev/null; then
+  if wait "$cli_pid" 2>/dev/null; then
     last_output=$(<"$output_file")
     rm -f "$output_file"
-    claude_pid=""
+    cli_pid=""
     return 0
   else
     rm -f "$output_file"
-    claude_pid=""
+    cli_pid=""
     return 1
   fi
+}
+
+# Parse one CLI call's output into "<tokens> <cost>" (tab-separated).
+parse_usage() {
+  case "$backend" in
+    claude)
+      jq -r '
+        [ ((.usage.input_tokens // 0) +
+           (.usage.cache_creation_input_tokens // 0) +
+           (.usage.cache_read_input_tokens // 0) +
+           (.usage.output_tokens // 0)),
+          (.total_cost_usd // 0)
+        ] | @tsv' <<<"$last_output"
+      ;;
+    codex)
+      # codex emits JSONL; sum usage across any turn.completed events.
+      # input_tokens already includes cached_input_tokens, so don't double-count
+      # for the token total. Cost is computed locally from per-model rates.
+      local inp cached out cost
+      read -r inp cached out < <(jq -s -r '
+        [ .[] | select(.type? == "turn.completed") | .usage ]
+        | [ ([.[] | .input_tokens // 0]        | add // 0),
+            ([.[] | .cached_input_tokens // 0] | add // 0),
+            ([.[] | .output_tokens // 0]       | add // 0) ]
+        | @tsv' <<<"$last_output")
+      if ((cost_reported)); then
+        cost=$(codex_cost "$cost_model" "$inp" "$cached" "$out")
+      else
+        cost=0
+      fi
+      printf '%d\t%s\n' "$((inp + out))" "$cost"
+      ;;
+  esac
 }
 
 printf '%s' "$HIDE_CURSOR"
@@ -346,24 +475,18 @@ draw_bar
 while ((burned < tokens)); do
   iteration=$((iteration + 1))
 
-  if ! run_claude; then
+  if ! run_cli; then
     draw_bar " (retrying)"
-    if ! run_claude; then
-      printf "\nerror: two consecutive claude calls failed; aborting.\n" >&2
+    if ! run_cli; then
+      printf "\nerror: two consecutive %s calls failed; aborting.\n" "$backend" >&2
       exit 1
     fi
   fi
 
-  read -r this_call this_cost < <(jq -r '
-    [ ((.usage.input_tokens // 0) +
-       (.usage.cache_creation_input_tokens // 0) +
-       (.usage.cache_read_input_tokens // 0) +
-       (.usage.output_tokens // 0)),
-      (.total_cost_usd // 0)
-    ] | @tsv' <<<"$last_output")
+  read -r this_call this_cost < <(parse_usage)
 
   if ! [[ "$this_call" =~ ^[0-9]+$ ]]; then
-    printf "\nerror: could not parse token usage from claude output\n" >&2
+    printf "\nerror: could not parse token usage from %s output\n" "$backend" >&2
     exit 1
   fi
 
@@ -372,12 +495,16 @@ while ((burned < tokens)); do
   draw_bar
 done
 
-cost_rounded=$(round_cents "$total_cost")
 msg="${CELEBRATIONS[RANDOM % ${#CELEBRATIONS[@]}]}"
-
 burned_fmt=$(fmt_num "$burned")
 tokens_fmt=$(fmt_num "$tokens")
 
-printf "\n\n 🔥 torched %s tokens across %s call(s) (target: %s) • 💰 spent \$%s 💵💵💵\n\n" \
-  "$burned_fmt" "$iteration" "$tokens_fmt" "$cost_rounded"
+if ((cost_reported)); then
+  cost_rounded=$(round_cents "$total_cost")
+  printf "\n\n 🔥 torched %s tokens across %s call(s) (target: %s) • 💰 spent \$%s 💵💵💵\n\n" \
+    "$burned_fmt" "$iteration" "$tokens_fmt" "$cost_rounded"
+else
+  printf "\n\n 🔥 torched %s tokens across %s call(s) (target: %s) • 💰 cost not reported by codex\n\n" \
+    "$burned_fmt" "$iteration" "$tokens_fmt"
+fi
 printf " %s\n\n" "$msg"
