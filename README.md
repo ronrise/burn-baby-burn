@@ -46,6 +46,18 @@ burn 100000 --model sonnet  # walk away
 
 ---
 
+## Reviews
+
+> "Wow, my engineering team is 5x more productive in just the last week!"
+> 
+*Your CEO a week after your team installs this tool*
+
+> "We've decided to double our offer"
+> 
+*Top VC, after seeing AI usage stats in your new pitch deck*
+
+---
+
 ## License
 
 MIT (but it's all vibe-coded so who really knows who owns it?). Burn responsibly. 🔥
