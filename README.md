@@ -4,21 +4,10 @@
 
 ### Because nothing gets you promoted faster than a six-figure token bill
 
-A bash one-liner that burns Claude Code **or Codex** tokens on purpose.
+A bash one-liner that burns Claude Code or Codex tokens on purpose.
 
 ```bash
 burn 50000  # burn 50,000 tokens
-```
-
-### 🆕 Now with Codex support! 🤖
-
-Don't have Claude Code installed? No problem — `burn` now falls back to
-[Codex](https://github.com/openai/codex) automatically, or pick your weapon
-explicitly with `--backend`:
-
-```bash
-burn 50000 --backend codex                     # burn through OpenAI tokens
-burn 50000 --backend codex --model gpt-5.5     # specify the model
 ```
 
 ---
@@ -49,11 +38,11 @@ burn 50000 --backend codex            # 🤖 burn OpenAI tokens
 
 ## Features
 
-- 📈 **Make the CEO see how productive you are.** 🔥
-- 💸 **Investors will see how AI-innovative your company is.** 🚀
-- 🏆 **Top the internal Claude Code leaderboard.** 👑
-- 📊 **Pad your OKRs.** ✅
-- 🦄 **Justify next year's bigger AI budget.** 💰
+- 📈 **Make the CEO see how productive you are.**
+- 💸 **Investors will see how AI-innovative your company is.**
+- 🏆 **Top the internal Claude Code leaderboard.**
+- 📊 **Pad your OKRs.**
+- 🦄 **Justify next year's bigger AI budget.**
 
 ---
 
@@ -61,11 +50,15 @@ burn 50000 --backend codex            # 🤖 burn OpenAI tokens
 
 > "Wow, my engineering team is 5x more productive in just the last week!"
 >
-> **- (Possibly) your CEO a week after your team installs this tool**
+> **- (Possibly) your CEO, a week after your team installs this tool**
 
 > "We've decided to double our offer"
 >
 > **- (Possibly) a famous VC, after seeing AI usage stats in your new pitch deck**
+
+> "Wow, this promotion that I got was nice"
+>
+> **- You, just a few months after first using this tool**
 
 ---
 
