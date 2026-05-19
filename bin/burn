@@ -305,12 +305,12 @@ DISCO_OFFSET=12
 
 redraw_disco() {
   local frame=$1
-  printf '\033[s'                     # save cursor
+  tput sc                     # save cursor
   printf '\033[%dA\r' "$DISCO_OFFSET" # move up to top inner row
   for row in 0 1 2 3 4 5 6 7 8; do
     print_disco_row "$frame" "$row"
   done
-  printf '\033[u' # restore cursor
+  tput rc # restore cursor
 }
 
 burned=0
