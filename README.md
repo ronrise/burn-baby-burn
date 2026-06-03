@@ -32,7 +32,7 @@ burn 100000 --model sonnet            # walk away
 burn 50000 --backend codex            # 🤖 burn OpenAI tokens
 ```
 
-![burn in action](grooving.gif)
+![burn in action](groove.gif)
 
 ---
 
