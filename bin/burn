@@ -157,7 +157,9 @@ You just asked to burn more than 1,000,000 tokens.
 Friendly reminder: THIS REPO IS A JOKE. It is a satirical bash script
 that lights real money on fire to inflate vanity metrics. There is no
 business reason to run it. The README is sarcasm. The "enterprise
-version" is not real. Your CEO might not be impressed.
+version" is not real. Yes, burning lots of tokens might impress
+your manager, but I'm not enough of a nihilist to be the actual
+mechanism enabling that.
 
 Refusing to proceed. Go touch grass. 🌱
 
@@ -303,12 +305,12 @@ DISCO_OFFSET=12
 
 redraw_disco() {
   local frame=$1
-  printf '\033[s'                     # save cursor
+  tput sc                     # save cursor
   printf '\033[%dA\r' "$DISCO_OFFSET" # move up to top inner row
   for row in 0 1 2 3 4 5 6 7 8; do
     print_disco_row "$frame" "$row"
   done
-  printf '\033[u' # restore cursor
+  tput rc # restore cursor
 }
 
 burned=0
