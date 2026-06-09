@@ -16,25 +16,42 @@ FILLER_TOKENS=1000
 # Backend-specific system overhead, measured empirically per CLI.
 CLAUDE_SYSTEM_OVERHEAD_TOKENS=9000  # claude -p with --tools ""
 CODEX_SYSTEM_OVERHEAD_TOKENS=12000  # codex exec --sandbox read-only
+KIRO_SYSTEM_OVERHEAD_TOKENS=10000   # kiro-cli chat --no-interactive (rough token estimate; kiro-cli does not report token usage)
+# Kiro CLI prints "▸ Credits: X.XX" per call. Convert credits → USD using
+# Kiro's bundled-tier rate ($20/1000 = $0.02/credit, same for Pro+/Power tiers).
+# Override via KIRO_CREDIT_USD env var if you're billed at a different rate
+# (e.g. 0.04 for overage, or a custom enterprise rate).
+KIRO_CREDIT_USD="${KIRO_CREDIT_USD:-0.02}"  # USD per Kiro credit
 FILLER_LINE="Burn baby burn, this is a disco inferno, burning tokens is for great engineers. "
 
 usage() {
   cat <<EOF
-burn — spin up Claude Code or Codex in a loop to burn approximately N tokens.
+burn — spin up Claude Code, Codex, or Kiro CLI in a loop to burn approximately N tokens.
 
 Usage:
-  burn TOKENS [--model MODEL] [--backend claude|codex]
+  burn TOKENS [--model MODEL] [--backend claude|codex|kiro]
 
 Arguments:
   TOKENS         Target tokens to burn. Minimum per call:
                    claude: $((CLAUDE_SYSTEM_OVERHEAD_TOKENS + FILLER_TOKENS))
                    codex:  $((CODEX_SYSTEM_OVERHEAD_TOKENS + FILLER_TOKENS))
+                   kiro:   $((KIRO_SYSTEM_OVERHEAD_TOKENS + FILLER_TOKENS)) (estimated)
 
 Options:
   --model NAME       Model to pass through (e.g. haiku, sonnet, gpt-5).
-  --backend NAME     Which CLI to drive: 'claude' or 'codex'.
-                     Default: claude if installed, else codex.
+  --backend NAME     Which CLI to drive: 'claude', 'codex', or 'kiro'.
+                     Default: claude if installed, else codex, else kiro.
   -h, --help         Show this help and exit.
+
+Environment variables:
+  KIRO_CREDIT_USD    USD per Kiro credit. Default: 0.02 (Kiro Pro/Pro+/Power
+                     bundled rate). Use 0.04 for the overage rate, or set to
+                     your enterprise rate.
+
+Note on 'kiro' backend:
+  kiro-cli does not emit token-usage JSON, so token counts are a deterministic
+  estimate. Cost is parsed from kiro-cli's per-call '▸ Credits: X.XX' line on
+  stderr and converted to USD via KIRO_CREDIT_USD.
 EOF
 }
 
@@ -100,38 +117,44 @@ if ! [[ "$tokens" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
-# Resolve backend: explicit flag > auto-detect (claude preferred, codex fallback).
+# Resolve backend: explicit flag > auto-detect (claude > codex > kiro).
 if [[ -z "$backend" ]]; then
   if command -v claude >/dev/null 2>&1; then
     backend=claude
   elif command -v codex >/dev/null 2>&1; then
     backend=codex
+  elif command -v kiro-cli >/dev/null 2>&1; then
+    backend=kiro
   else
-    echo "error: neither 'claude' nor 'codex' found on PATH." >&2
+    echo "error: none of 'claude', 'codex', or 'kiro-cli' found on PATH." >&2
     echo "       install Claude Code: https://docs.claude.com/claude-code" >&2
     echo "       or Codex CLI:        https://github.com/openai/codex" >&2
+    echo "       or Kiro CLI:         https://kiro.dev" >&2
     exit 1
   fi
 fi
 
+# Each backend has its own executable name and per-call token overhead.
 case "$backend" in
-  claude) SYSTEM_OVERHEAD_TOKENS=$CLAUDE_SYSTEM_OVERHEAD_TOKENS ;;
-  codex)  SYSTEM_OVERHEAD_TOKENS=$CODEX_SYSTEM_OVERHEAD_TOKENS ;;
+  claude) SYSTEM_OVERHEAD_TOKENS=$CLAUDE_SYSTEM_OVERHEAD_TOKENS; backend_bin=claude ;;
+  codex)  SYSTEM_OVERHEAD_TOKENS=$CODEX_SYSTEM_OVERHEAD_TOKENS;  backend_bin=codex ;;
+  kiro)   SYSTEM_OVERHEAD_TOKENS=$KIRO_SYSTEM_OVERHEAD_TOKENS;   backend_bin=kiro-cli ;;
   *)
-    echo "error: unknown --backend '$backend' (must be 'claude' or 'codex')" >&2
+    echo "error: unknown --backend '$backend' (must be 'claude', 'codex', or 'kiro')" >&2
     exit 2
     ;;
 esac
 
-if ! command -v "$backend" >/dev/null 2>&1; then
-  echo "error: '$backend' CLI not found on PATH." >&2
+if ! command -v "$backend_bin" >/dev/null 2>&1; then
+  echo "error: '$backend_bin' CLI not found on PATH." >&2
   case "$backend" in
     claude) echo "       install Claude Code: https://docs.claude.com/claude-code" >&2 ;;
     codex)  echo "       install Codex CLI:   https://github.com/openai/codex" >&2 ;;
+    kiro)   echo "       install Kiro CLI:    https://kiro.dev" >&2 ;;
   esac
   exit 1
 fi
-if ! command -v jq >/dev/null 2>&1; then
+if [[ "$backend" != kiro ]] && ! command -v jq >/dev/null 2>&1; then
   echo "error: 'jq' not found on PATH (used to parse CLI JSON output)." >&2
   echo "       install with: brew install jq" >&2
   exit 1
@@ -319,6 +342,7 @@ total_cost=0.000000
 BAR_WIDTH=30
 cli_pid=""
 last_output=""
+last_stderr=""
 
 # Build CLI command for the chosen backend.
 case "$backend" in
@@ -330,6 +354,13 @@ case "$backend" in
     ;;
   codex)
     cli_cmd=(codex exec --json --skip-git-repo-check --sandbox read-only)
+    [[ -n "$model" ]] && cli_cmd+=(--model "$model")
+    ;;
+  kiro)
+    # kiro-cli has no structured output and no usage reporting (as of 2.4.0),
+    # so we drive it as a one-shot chat and estimate tokens deterministically.
+    # --trust-tools= disables every tool so it just answers the prompt.
+    cli_cmd=(kiro-cli chat --no-interactive --trust-tools=)
     [[ -n "$model" ]] && cli_cmd+=(--model "$model")
     ;;
 esac
@@ -353,6 +384,9 @@ elif [[ "$backend" == codex ]]; then
       cost_reported=1
     fi
   fi
+elif [[ "$backend" == kiro ]]; then
+  # kiro-cli prints credits per call; we convert to USD using KIRO_CREDIT_USD.
+  cost_reported=1
 fi
 
 format_cost_field() {
@@ -429,12 +463,15 @@ on_interrupt() {
 trap on_interrupt INT
 
 # Run one CLI call in the background while animating flames. On success
-# leaves the parsed stdout in $last_output. Returns the CLI exit status.
+# leaves the parsed stdout in $last_output and stderr in $last_stderr.
+# Returns the CLI exit status.
 run_cli() {
-  local output_file
+  local output_file stderr_file
   output_file=$(mktemp)
+  stderr_file=$(mktemp)
   # </dev/null prevents codex from waiting on stdin when run in background.
-  "${cli_cmd[@]}" "$prompt" >"$output_file" 2>/dev/null </dev/null &
+  # Capture stderr too — kiro-cli prints its per-call cost there.
+  "${cli_cmd[@]}" "$prompt" >"$output_file" 2>"$stderr_file" </dev/null &
   cli_pid=$!
 
   local frame=0
@@ -446,11 +483,12 @@ run_cli() {
 
   if wait "$cli_pid" 2>/dev/null; then
     last_output=$(<"$output_file")
-    rm -f "$output_file"
+    last_stderr=$(<"$stderr_file")
+    rm -f "$output_file" "$stderr_file"
     cli_pid=""
     return 0
   else
-    rm -f "$output_file"
+    rm -f "$output_file" "$stderr_file"
     cli_pid=""
     return 1
   fi
@@ -485,6 +523,21 @@ parse_usage() {
         cost=0
       fi
       printf '%d\t%s\n' "$((inp + out))" "$cost"
+      ;;
+    kiro)
+      # kiro-cli (2.4.0) doesn't expose token counts, but it does print a
+      # per-call credits line on stderr like "▸ Credits: 0.15 • Time: 3s".
+      # Strip ANSI escapes, grep the line, multiply by KIRO_CREDIT_USD.
+      local credits_str credits cost
+      credits_str=$(printf '%s' "$last_stderr" \
+        | sed $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' \
+        | grep -oE 'Credits:[[:space:]]*[0-9]+(\.[0-9]+)?' \
+        | tail -1 \
+        | awk '{print $2}')
+      credits="${credits_str:-0}"
+      cost=$(awk -v c="$credits" -v r="$KIRO_CREDIT_USD" 'BEGIN{printf "%.6f", c*r}')
+      # Tokens stay as a deterministic estimate since kiro-cli doesn't expose them.
+      printf '%d\t%s\n' "$TOKENS_PER_CALL" "$cost"
       ;;
   esac
 }
